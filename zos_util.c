@@ -10,14 +10,50 @@
 #define _OPEN_SYS_FILE_EXT 1
 #include <Python.h>
 #include <object.h>
+#include <stdlib.h>
+#include <limits.h>
 #include <sys/stat.h>
+#include <sys/utsname.h>
 
 #define BINARY_CCSID 65535
 #define UNTAG_CCSID 0
 #define ISO8859_CCSID 819
+#define IBM1047_CCSID 1047
 
-static PyObject *__setccsid(PyObject *self, PyObject *args, PyObject *kwargs,
-                            int ccsid) {
+static int __vm__ = 0;
+
+const static int iso8859 = AUDTREADFAIL  | AUDTREADSUCC  |
+                           AUDTWRITEFAIL | AUDTWRITESUCC |
+                           AUDTEXECFAIL;                  
+
+const static int ibm1047 = AUDTREADFAIL  |                
+                           AUDTWRITEFAIL |                
+                           AUDTEXECFAIL;                  
+
+const static int binary  = AUDTREADFAIL  |                
+                           AUDTWRITEFAIL |                
+                           AUDTEXECFAIL  | AUDTEXECSUCC;  
+
+const static int mixAsc  = AUDTREADFAIL  | AUDTREADSUCC  |
+                           AUDTWRITEFAIL |                
+                           AUDTEXECFAIL  | AUDTEXECSUCC;  
+
+const static int mixEbc  = AUDTREADFAIL  |               
+                           AUDTWRITEFAIL | AUDTWRITESUCC |
+                           AUDTEXECFAIL  | AUDTEXECSUCC;  
+
+static inline int
+isebcdic(char c)
+{
+  if ((c >= 0x40) & (c < 0xff))
+     return (1);
+  else
+     return (0);
+}
+
+static PyObject *
+__setccsid(PyObject *self, PyObject *args, PyObject *kwargs, int ccsid) 
+{
   char *path;
   int txtflag = 1;
   int res;
@@ -49,11 +85,14 @@ static PyObject *__setccsid(PyObject *self, PyObject *args, PyObject *kwargs,
   Py_RETURN_NONE;
 }
 
-static PyObject *__settxtflag(PyObject *self, PyObject *args, int txtflag) {
+static PyObject *
+__settxtflag(PyObject *self, PyObject *args, int txtflag) 
+{
   char *path;
   int res;
   struct stat st;
   attrib_t attr;
+  unsigned short ccsid;
 
   if (!PyArg_ParseTuple(args, "s", &path))
     return NULL;
@@ -67,7 +106,18 @@ static PyObject *__settxtflag(PyObject *self, PyObject *args, int txtflag) {
     PyErr_SetFromErrno(PyExc_OSError);
     return NULL;
   }
-  unsigned short ccsid = st.st_tag.ft_ccsid;
+  
+  if (__vm__) {
+    if ((st.st_useraudit == iso8859) ||
+        (st.st_useraudit == mixAsc))
+      ccsid = ISO8859_CCSID;
+    else if (st.st_useraudit == binary)
+      ccsid = BINARY_CCSID;
+    else
+      ccsid = IBM1047_CCSID;
+  } else {
+    ccsid =  st.st_tag.ft_ccsid;
+  }
 
   attr.att_filetag.ft_ccsid = ccsid;
   attr.att_filetag.ft_txtflag = txtflag;
@@ -81,7 +131,9 @@ static PyObject *__settxtflag(PyObject *self, PyObject *args, int txtflag) {
   Py_RETURN_NONE;
 }
 
-static PyObject *__set_apf_auth(PyObject *self, PyObject *args, int is_apf) {
+static PyObject *
+__set_apf_auth(PyObject *self, PyObject *args, int is_apf) 
+{
   char *path;
   int res;
   attrib_t attr;
@@ -103,30 +155,44 @@ static PyObject *__set_apf_auth(PyObject *self, PyObject *args, int is_apf) {
   Py_RETURN_NONE;
 }
 
-static PyObject *_chtag_impl(PyObject *self, PyObject *args, PyObject *kwargs) {
+static PyObject *
+_chtag_impl(PyObject *self, PyObject *args, PyObject *kwargs) 
+{
   return __setccsid(self, args, kwargs, ISO8859_CCSID);
 }
 
-static PyObject *_tag_binary_impl(PyObject *self, PyObject *args) {
+static PyObject *
+_tag_binary_impl(PyObject *self, PyObject *args) 
+{
   return __setccsid(self, args, NULL, BINARY_CCSID);
 }
 
-static PyObject *_untag_impl(PyObject *self, PyObject *args) {
+static PyObject *
+_untag_impl(PyObject *self, PyObject *args) 
+{
   return __setccsid(self, args, NULL, UNTAG_CCSID);
 }
 
-static PyObject *_tag_text_impl(PyObject *self, PyObject *args) {
+static PyObject *
+_tag_text_impl(PyObject *self, PyObject *args) 
+{
   return __settxtflag(self, args, 1);
 }
 
-static PyObject *_tag_mixed_impl(PyObject *self, PyObject *args) {
+static PyObject *
+_tag_mixed_impl(PyObject *self, PyObject *args) 
+{
   return __settxtflag(self, args, 0);
 }
 
-static PyObject *_get_tag_impl(PyObject *self, PyObject *args) {
+static PyObject *
+_get_tag_impl(PyObject *self, PyObject *args) 
+{
   struct stat st;
   char *path;
   int res;
+  int txtflag;
+  unsigned short ccsid;
 
   if (!PyArg_ParseTuple(args, "s", &path))
     return NULL;
@@ -137,18 +203,160 @@ static PyObject *_get_tag_impl(PyObject *self, PyObject *args) {
     return NULL;
   }
 
-  unsigned short ccsid = st.st_tag.ft_ccsid;
-  int txtflag = st.st_tag.ft_txtflag;
+  if (__vm__) {
+    if (st.st_useraudit == iso8859) {
+      ccsid = ISO8859_CCSID;
+      txtflag = 1;
+    } else if (st.st_useraudit == mixAsc) {
+        ccsid = ISO8859_CCSID;
+        txtflag = 0;
+    } else if (st.st_useraudit == binary) {
+        ccsid = BINARY_CCSID;
+        txtflag = 0;
+    } else if (st.st_useraudit == ibm1047) {
+        ccsid = IBM1047_CCSID;
+        txtflag = 1;
+    } else if (st.st_useraudit == mixEbc) {
+        ccsid = IBM1047_CCSID;
+        txtflag = 0;
+    }    
+  } else {
+    ccsid =  st.st_tag.ft_ccsid;
+    txtflag = st.st_tag.ft_txtflag;
+  }
 
   return Py_BuildValue("(HN)", ccsid, PyBool_FromLong((long)(txtflag)));
 }
 
-static PyObject *_enable_apf_auth_impl(PyObject *self, PyObject *args) {
+static PyObject *
+_get_tagging_impl(PyObject *self, PyObject *args) 
+{
+  struct stat st;
+  char *path;
+  PyObject *obj;
+  int res;
+  unsigned short ccsid;
+
+  if (!PyArg_ParseTuple(args, "O", &obj))
+    return NULL;
+
+  if (PyBytes_Check(obj)) {
+    path = PyBytes_AsString(obj);
+    int i, asc = 1, ebc = 1;
+    for (i = 0; i < PyBytes_GET_SIZE(obj); i++) {
+      if (!isascii(path[i]))
+        asc = 0;
+      if (!isebcdic(path[i]))
+        ebc = 0;
+    }
+    if (asc) 
+      ccsid = ISO8859_CCSID;
+    else if (ebc)
+      ccsid = IBM1047_CCSID;
+    else 
+      ccsid = BINARY_CCSID;
+  } else if (!PyUnicode_Check(obj)) {
+    return NULL;
+  } else {
+    path = (char *) PyUnicode_AsUTF8(obj);
+    
+    res = stat(path, &st);
+    if (res < 0) {
+      PyErr_SetFromErrno(PyExc_OSError);
+      return NULL;
+    }
+  
+    if (__vm__) {
+      if (st.st_useraudit == iso8859) {
+        ccsid = ISO8859_CCSID;
+      } else if (st.st_useraudit == mixAsc) {
+          ccsid = ISO8859_CCSID;
+      } else if (st.st_useraudit == binary) {
+          ccsid = BINARY_CCSID;
+      } else if (st.st_useraudit == ibm1047) {
+          ccsid = IBM1047_CCSID;
+      } else if (st.st_useraudit == mixEbc) {
+          ccsid = IBM1047_CCSID;
+      }    
+    } else {
+      ccsid =  st.st_tag.ft_ccsid;
+    }
+  }
+  return Py_BuildValue("h", ccsid);
+}
+
+static PyObject *
+_get_tagging_f_impl(PyObject *self, PyObject *args) 
+{
+  return _get_tag_impl(self, args);
+}  
+
+static PyObject *
+_enable_apf_auth_impl(PyObject *self, PyObject *args) 
+{
   return __set_apf_auth(self, args, 1);
 }
 
-static PyObject *_disable_apf_auth_impl(PyObject *self, PyObject *args) {
+static PyObject *
+_disable_apf_auth_impl(PyObject *self, PyObject *args) 
+{
   return __set_apf_auth(self, args, 0);
+}
+
+static PyObject *
+_set_tagging_impl(PyObject *self, PyObject *args, PyObject *kwargs)
+{
+  char *path;
+  int txtflag = 1;
+  int res;
+  int ccsid;
+  attrib_t attr;
+  PyObject *obj;
+  static char *keywords[] = {"filepath", "ccsid", NULL};
+
+  memset(&attr, 0, sizeof(attr));
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwargs, "Oi", keywords, &obj,
+                                   &ccsid))
+    return NULL;
+
+  if (PyBytes_Check(obj))
+    path = PyBytes_AsString(obj);
+  else if (PyUnicode_Check(obj))
+    path = (char *) PyUnicode_AsUTF8(obj);
+  else
+    return NULL;
+    
+  attr.att_filetagchg = 1;
+  if ((ccsid == UNTAG_CCSID) || (ccsid == BINARY_CCSID))
+    attr.att_filetag.ft_txtflag = 0;
+  else
+    attr.att_filetag.ft_txtflag = 1;
+  attr.att_filetag.ft_ccsid = ccsid;
+
+  res = __chattr(path, &attr, sizeof(attr));
+  perror("__chattr");
+  if (res < 0) {
+    PyErr_SetFromErrno(PyExc_OSError);
+    return NULL;
+  }
+
+  Py_RETURN_NONE;
+}
+
+static PyObject *
+_zos_realpath_impl(PyObject *self, PyObject *args) 
+{
+  char *path, 
+       resolved[_XOPEN_PATH_MAX];
+
+  if (!PyArg_ParseTuple(args, "s", &path))
+    return NULL;
+        
+  if (realpath((const char *) path, (char *) &resolved) == NULL)
+    return NULL;
+
+  return Py_BuildValue("s", resolved);
 }
 
 PyDoc_STRVAR(
@@ -238,6 +446,30 @@ PyDoc_STRVAR(disable_apf_auth_doc,
              "owner of the\n"
              "file or have superuser authority.\n");
 
+PyDoc_STRVAR(get_tagging_doc, "get_tagging(filepath)\n"
+                              "--\n"
+                              "\n"
+                              "Return a ccsid of file "
+                              "tag information associated with the\n"
+                              "file.");
+
+PyDoc_STRVAR(get_tagging_f_doc, "get_tagging_f_info(filepath)\n"
+                                "--\n"
+                                "\n"
+                                "Return a tuple (ccsid, set_txtflag) of file "
+                                "tag information associated with the\n"
+                                "file.");
+
+PyDoc_STRVAR(set_tagging_doc, "set_tagging(filepath, ccsid)\n"
+                              "--\n"
+                              "\n"
+                              "Set the ccsid of file tag for the specified file.");
+
+PyDoc_STRVAR(zos_realpath_doc, "zos_realpath(filepath)\n"
+                               "--\n"
+                               "\n"
+                               "Return the real path of the z/OS file.");
+
 static PyMethodDef ZosUtilMethods[] = {
     {"chtag", (PyCFunction)_chtag_impl, METH_VARARGS | METH_KEYWORDS,
      chtag_doc},
@@ -251,6 +483,14 @@ static PyMethodDef ZosUtilMethods[] = {
      disable_apf_auth_doc},
     {"enable_apf", (PyCFunction)_enable_apf_auth_impl, METH_VARARGS,
      enable_apf_auth_doc},
+    {"get_tagging", (PyCFunction)_get_tagging_impl, METH_VARARGS | METH_KEYWORDS,
+     get_tagging_doc},
+    {"get_tagging_f", (PyCFunction)_get_tagging_f_impl, METH_VARARGS,
+     get_tagging_f_doc},
+    {"set_tagging", (PyCFunction)_set_tagging_impl, METH_VARARGS | METH_KEYWORDS,
+     set_tagging_doc},
+    {"zos_realpath", (PyCFunction)_zos_realpath_impl, METH_VARARGS,
+     zos_realpath_doc},
     {NULL, NULL, 0, NULL}, // sentinel
 };
 
@@ -264,10 +504,15 @@ static PyModuleDef zos_util = {
 
 PyMODINIT_FUNC PyInit_zos_util() {
   PyObject *module;
+  struct utsname *buf = __alloca(512);  /* z/VM's utsname is much larger than z/OS's */
 
   module = PyModule_Create(&zos_util);
   if (module == NULL) {
     return NULL;
+  }
+  if (uname(buf) == 0) {
+    if (strcmp(buf->sysname, "z/VM") == 0)
+      __vm__ = 1;
   }
   return module;
 }
